@@ -38,14 +38,6 @@ REBALANCE_EVERY = 20
 TARGET_GROSS_EXPOSURE = 0.95
 
 
-def _cross_sectional_ranks(values: np.ndarray) -> np.ndarray:
-    """Return 0..n-1 ranks for a 1D array."""
-    order = np.argsort(values)
-    ranks = np.empty_like(order, dtype=float)
-    ranks[order] = np.arange(values.shape[0], dtype=float)
-    return ranks
-
-
 def get_actions(prices: np.ndarray) -> np.ndarray:
     """
     Build an actions matrix from an anonymized open-price matrix.
@@ -126,11 +118,27 @@ def get_actions(prices: np.ndarray) -> np.ndarray:
         vol = np.std(log_returns, axis=1)
         vol = np.maximum(vol, 1e-4)
 
+        primary_order = np.argsort(primary_momentum)
+        primary_ranks = np.empty_like(primary_order, dtype=float)
+        primary_ranks[primary_order] = np.arange(num_stocks, dtype=float)
+
+        secondary_order = np.argsort(secondary_momentum)
+        secondary_ranks = np.empty_like(secondary_order, dtype=float)
+        secondary_ranks[secondary_order] = np.arange(num_stocks, dtype=float)
+
+        short_order = np.argsort(short_momentum)
+        short_ranks = np.empty_like(short_order, dtype=float)
+        short_ranks[short_order] = np.arange(num_stocks, dtype=float)
+
+        breakout_order = np.argsort(breakout)
+        breakout_ranks = np.empty_like(breakout_order, dtype=float)
+        breakout_ranks[breakout_order] = np.arange(num_stocks, dtype=float)
+
         score = (
-            0.45 * _cross_sectional_ranks(primary_momentum)
-            + 0.30 * _cross_sectional_ranks(secondary_momentum)
-            + 0.10 * _cross_sectional_ranks(short_momentum)
-            + 0.15 * _cross_sectional_ranks(breakout)
+            0.45 * primary_ranks
+            + 0.30 * secondary_ranks
+            + 0.10 * short_ranks
+            + 0.15 * breakout_ranks
         ) / vol
 
         leaders = np.argsort(score)[-TOP_K:]
