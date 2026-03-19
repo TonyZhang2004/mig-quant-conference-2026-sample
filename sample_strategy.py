@@ -44,6 +44,7 @@ def get_actions(prices: np.ndarray) -> np.ndarray:
             "top_k": int(data["top_k"]),
             "rebalance_every": int(data["rebalance_every"]),
             "gross": float(data["gross"]),
+            "use_regime": bool(int(data["use_regime"])) if "use_regime" in data else False,
         }
 
     model = _MODEL_CACHE
@@ -57,9 +58,11 @@ def get_actions(prices: np.ndarray) -> np.ndarray:
     top_k = model["top_k"]
     rebalance_every = model["rebalance_every"]
     gross = model["gross"]
+    use_regime = model["use_regime"]
 
     start_day = int(np.max(lookbacks))
-    if num_days <= start_day:
+    regime_start_day = max(start_day, 100)
+    if num_days <= regime_start_day:
         return actions
 
     cash = START_CASH
@@ -68,7 +71,9 @@ def get_actions(prices: np.ndarray) -> np.ndarray:
     pending_target = np.zeros(num_stocks, dtype=int)
     pending_score = np.zeros(num_stocks, dtype=float)
 
-    for day in range(start_day, num_days):
+    market_mean = prices.mean(axis=0)
+
+    for day in range(regime_start_day, num_days):
         if pending_buy_day == day:
             buy_indices = np.flatnonzero(pending_target > positions)
             if buy_indices.size:
@@ -86,7 +91,7 @@ def get_actions(prices: np.ndarray) -> np.ndarray:
                     positions[stock_idx] += buy_qty
             pending_buy_day = -1
 
-        if (day - start_day) % rebalance_every != 0:
+        if (day - regime_start_day) % rebalance_every != 0:
             continue
 
         prev_prices = prices[:, day - 1]
@@ -123,16 +128,23 @@ def get_actions(prices: np.ndarray) -> np.ndarray:
         features = (features - mean) / scale
         scores = features @ coef + intercept
 
-        leaders = np.argsort(scores)[-top_k:]
-        vol20 = np.maximum(vol_cache[20], 1e-4)
-        inv_vol = 1.0 / vol20[leaders]
-        weights = inv_vol / inv_vol.sum()
-
         target_positions = np.zeros(num_stocks, dtype=int)
         day_prices = prices[:, day]
-        for weight, stock_idx in zip(weights, leaders):
-            raw_shares = int((equity * gross * weight) / (day_prices[stock_idx] * (1.0 + FEE_RATE)))
-            target_positions[stock_idx] = min(POSITION_LIMIT, max(0, raw_shares))
+        regime_ok = True
+        if use_regime:
+            market_ma100 = market_mean[day - 100 : day].mean()
+            market_ma50 = market_mean[day - 50 : day].mean()
+            regime_ok = market_mean[day - 1] > market_ma100 and market_ma50 > market_ma100
+
+        if regime_ok:
+            leaders = np.argsort(scores)[-top_k:]
+            vol20 = np.maximum(vol_cache[20], 1e-4)
+            inv_vol = 1.0 / vol20[leaders]
+            weights = inv_vol / inv_vol.sum()
+
+            for weight, stock_idx in zip(weights, leaders):
+                raw_shares = int((equity * gross * weight) / (day_prices[stock_idx] * (1.0 + FEE_RATE)))
+                target_positions[stock_idx] = min(POSITION_LIMIT, max(0, raw_shares))
 
         delta = target_positions - positions
         sell_indices = np.flatnonzero(delta < 0)
